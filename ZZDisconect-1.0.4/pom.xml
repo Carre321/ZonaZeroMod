@@ -1,0 +1,52 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.zzdisconect</groupId>
+  <artifactId>ZZDisconect</artifactId>
+  <version>1.0.4</version>
+  <packaging>jar</packaging>
+
+  <name>ZZDisconect</name>
+  <description>Fallback redirect + /parar (announce+delay+stop), /halt (non-op to lobby + whitelist), and auto-restart announcements.</description>
+
+  <properties>
+    <maven.compiler.source>25</maven.compiler.source>
+    <maven.compiler.target>25</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Path to the Hytale server API jar on Windows -->
+    <hytale.api.jar>C:\HytalePL\api\HytaleServer.jar</hytale.api.jar>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.hypixel.hytale</groupId>
+      <artifactId>Server</artifactId>
+      <version>local</version>
+      <scope>system</scope>
+      <systemPath>${hytale.api.jar}</systemPath>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>25</release>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

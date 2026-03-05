@@ -1,0 +1,20 @@
+{
+  "Group": "com.zzdisconect",
+  "Name": "ZZDisconect",
+  "Version": "1.0.4",
+  "Description": "Fallback redirect + /parar (announce+delay+stop), /halt (non-op to lobby + whitelist), and auto-restart announcements.",
+  "Authors": [
+    {
+      "Name": "You"
+    }
+  ],
+  "Website": "",
+  "Main": "com.zzdisconect.ZZDisconect",
+  "ServerVersion": "*",
+  "Dependencies": {},
+  "OptionalDependencies": {},
+  "LoadBefore": {},
+  "DisabledByDefault": false,
+  "IncludesAssetPack": false,
+  "SubPlugins": []
+}
