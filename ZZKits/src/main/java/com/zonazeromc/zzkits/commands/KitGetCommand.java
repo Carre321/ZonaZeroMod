@@ -19,7 +19,7 @@ public class KitGetCommand extends AbstractKitTargetCommand {
     private final RequiredArg<String> kitArg;
 
     public KitGetCommand() {
-        super("get", "Da un kit a un jugador específico");
+        super("get", "Da un kit a un jugador (o al admin que ejecuta el comando)");
         this.kitArg = withRequiredArg("kit", "Nombre del kit", ArgTypes.STRING);
 
         // [player] al final
@@ -39,17 +39,11 @@ public class KitGetCommand extends AbstractKitTargetCommand {
             return;
         }
 
-        // En /kit get queremos obligar a especificar jugador (para diferenciarlo de /kit <nombre>)
-        if (senderRef != null && senderRef.equals(targetRef)) {
-            ZZKits.instance().getMensajes().send(ctx, "uso_kit_get");
-return;
-        }
-
         String kitName = ZZKits.instance().getKitManager().sanitize(kitArg.get(ctx));
         KitDefinition kit = ZZKits.instance().getKitManager().getKit(kitName);
         if (kit == null) {
             ZZKits.instance().getMensajes().send(ctx, "kit_no_existe", java.util.Map.of("kit", kitName));
-return;
+            return;
         }
 
         Player target = store.getComponent(targetRef, Player.getComponentType());
@@ -58,7 +52,6 @@ return;
             return;
         }
 
-        
         boolean overwrite = ZZKits.instance().getConfigManager().get().overwriteSlotsOnGive;
         String fullMode = ZZKits.instance().getConfigManager().get().inventoryFullMode;
 
@@ -66,8 +59,12 @@ return;
 
         if (!res.success()) {
             // No se entregó por falta de espacio
-            ZZKits.instance().getMensajes().send(ctx, "objetivo_sin_espacio", java.util.Map.of("player", target.getDisplayName()));
-            ZZKits.instance().getMensajes().send(target, "inventario_sin_espacio");
+            if (senderRef != null && senderRef.equals(targetRef)) {
+                ZZKits.instance().getMensajes().send(ctx, "inventario_sin_espacio");
+            } else {
+                ZZKits.instance().getMensajes().send(ctx, "objetivo_sin_espacio", java.util.Map.of("player", target.getDisplayName()));
+                ZZKits.instance().getMensajes().send(target, "inventario_sin_espacio");
+            }
             return;
         }
 
@@ -82,10 +79,13 @@ return;
 
         if (res.droppedQuantity() > 0) {
             mensajes.send(target, "items_tirados_suelo", java.util.Map.of("dropped", String.valueOf(res.droppedQuantity())));
-            mensajes.send(ctx, "items_tirados_suelo_otro", java.util.Map.of(
-                "player", target.getDisplayName(),
-                "dropped", String.valueOf(res.droppedQuantity())
-            ));
+            if (senderRef != null && !senderRef.equals(targetRef)) {
+                mensajes.send(ctx, "items_tirados_suelo_otro", java.util.Map.of(
+                    "player", target.getDisplayName(),
+                    "dropped", String.valueOf(res.droppedQuantity())
+                ));
+            }
         }
-}
+
+    }
 }
