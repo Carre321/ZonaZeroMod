@@ -37,20 +37,6 @@ Al arrancar, ZZKits crea:
 
 ---
 
-## 🛠️ Compilación (Maven)
-
-En la carpeta donde está el `pom.xml`:
-
-```bash
-mvn clean package
-```
-
-El JAR se genera en:
-
-- `target/ZZKits.jar`
-
----
-
 ## ⌨️ Comandos
 
 ### Jugadores
@@ -167,8 +153,3 @@ Después de cambiar mensajes, usa:
 5. Configura starter (opcional):
    - `/kitsetstarter`
    - `starterKit: "default"` (o el que quieras)
-
----
-
-## 📄 Licencia / Distribución
-Si lo vas a publicar, puedes incluir este README y traducir `mensajes.json` para otros idiomas.
