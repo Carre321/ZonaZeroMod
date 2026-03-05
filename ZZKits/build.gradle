@@ -1,0 +1,64 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = 'com.tuservidor'
+version = '1.1.0'
+description = 'ZZKits - Kit de inicio personalizable para Hytale'
+
+// Hytale requiere Java 25
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = "hytale-release"
+        url = uri("https://maven.hytale.com/release")
+    }
+}
+
+dependencies {
+    // API del servidor Hytale (provista por el servidor en runtime, no se bundlea)
+    compileOnly("com.hypixel.hytale:Server:+")
+}
+
+// Configuración del JAR final
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'com.zonazeromc.zzkits.ZZKits'
+        )
+    }
+}
+
+// ShadowJar: crea el JAR con todas las dependencias incluidas
+// (solo las que NO sean compileOnly)
+shadowJar {
+    archiveClassifier.set('')
+    archiveBaseName.set('ZZKits')
+
+    // Incluir el manifest.json como recurso
+    from('src/main/resources') {
+        include 'manifest.json'
+    }
+}
+
+// Al hacer build, ejecutar shadowJar automáticamente
+build.dependsOn shadowJar
+
+// Tarea para copiar el JAR compilado directamente a la carpeta de mods
+// Ajusta la ruta según tu instalación de Hytale
+tasks.register('deployToServer', Copy) {
+    dependsOn shadowJar
+    from shadowJar.archiveFile
+    // Cambia esta ruta a tu carpeta de mods del servidor Hytale
+    into System.getProperty("user.home") + "/hytale-server/mods/"
+    doLast {
+        println "ZZKits.jar copiado a la carpeta de mods del servidor."
+    }
+}
