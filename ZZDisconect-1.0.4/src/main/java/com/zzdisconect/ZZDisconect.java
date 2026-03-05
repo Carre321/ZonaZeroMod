@@ -13,8 +13,10 @@ import com.hypixel.hytale.server.core.permissions.PermissionsModule;
 
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
 /**
@@ -48,7 +50,8 @@ public class ZZDisconect extends JavaPlugin {
                 return t;
             });
 
-    private volatile boolean pararRunning = false;
+    private final AtomicBoolean pararRunning = new AtomicBoolean(false);
+    private final AtomicBoolean haltRunning = new AtomicBoolean(false);
 
     public ZZDisconect(@Nonnull JavaPluginInit init) {
         super(init);
@@ -92,6 +95,11 @@ public class ZZDisconect extends JavaPlugin {
 
         if (!cfg.isRedirectDuringHandshake() || !cfg.isMaintenanceMode()) return;
 
+        if (!isValidTarget(cfg.getRedirectHost(), cfg.getRedirectPort())) {
+            getLogger().at(Level.WARNING).log("Handshake redirect skipped due to invalid RedirectHost/RedirectPort configuration.");
+            return;
+        }
+
         event.referToServer(cfg.getRedirectHost(), cfg.getRedirectPort());
         event.setReason("Servidor en mantenimiento. Redirigiendo…");
         event.setCancelled(true);
@@ -102,8 +110,15 @@ public class ZZDisconect extends JavaPlugin {
 
     // ===== /parar flow =====
     public void runPararSequence(String trigger) {
-        if (pararRunning) return;
-        pararRunning = true;
+        if (haltRunning.get()) {
+            getLogger().at(Level.INFO).log("Cannot start parar while halt sequence is running. Trigger=%s", trigger);
+            return;
+        }
+
+        if (!pararRunning.compareAndSet(false, true)) {
+            getLogger().at(Level.INFO).log("Parar sequence already running. Ignoring trigger=%s", trigger);
+            return;
+        }
 
         try {
             ZZDisconectConfig cfg = config.get();
@@ -137,12 +152,22 @@ public class ZZDisconect extends JavaPlugin {
         } catch (Throwable t) {
             getLogger().at(Level.SEVERE).withCause(t).log("runPararSequence failed");
         } finally {
-            pararRunning = false;
+            pararRunning.set(false);
         }
     }
 
     // ===== /halt flow =====
     public void runHaltSequence(String trigger) {
+        if (pararRunning.get()) {
+            getLogger().at(Level.INFO).log("Cannot start halt while parar sequence is running. Trigger=%s", trigger);
+            return;
+        }
+
+        if (!haltRunning.compareAndSet(false, true)) {
+            getLogger().at(Level.INFO).log("Halt sequence already running. Ignoring trigger=%s", trigger);
+            return;
+        }
+
         try {
             ZZDisconectConfig cfg = config.get();
             ZZDisconectMessages msg = messages.get();
@@ -163,6 +188,8 @@ public class ZZDisconect extends JavaPlugin {
             }
         } catch (Throwable t) {
             getLogger().at(Level.SEVERE).withCause(t).log("runHaltSequence failed");
+        } finally {
+            haltRunning.set(false);
         }
     }
 
@@ -173,6 +200,11 @@ public class ZZDisconect extends JavaPlugin {
      */
     private int referPlayers(boolean onlyNonOp) {
         ZZDisconectConfig cfg = config.get();
+        if (!isValidTarget(cfg.getFallbackHost(), cfg.getFallbackPort())) {
+            getLogger().at(Level.SEVERE).log("Fallback redirection aborted due to invalid FallbackHost/FallbackPort configuration.");
+            return 0;
+        }
+
         int moved = 0;
 
         List<PlayerRef> players = Universe.get().getPlayers();
@@ -183,9 +215,14 @@ public class ZZDisconect extends JavaPlugin {
                 continue;
             }
 
-            playerRef.sendMessage(Message.raw(prefix(messages.get()) + "→ " + cfg.getFallbackHost() + ":" + cfg.getFallbackPort()));
-            playerRef.referToServer(cfg.getFallbackHost(), cfg.getFallbackPort());
-            moved++;
+            try {
+                playerRef.sendMessage(Message.raw(prefix(messages.get()) + "→ " + cfg.getFallbackHost() + ":" + cfg.getFallbackPort()));
+                playerRef.referToServer(cfg.getFallbackHost(), cfg.getFallbackPort());
+                moved++;
+            } catch (Throwable t) {
+                getLogger().at(Level.WARNING).withCause(t)
+                        .log("Failed to refer player %s to fallback server", playerRef.getUuid());
+            }
         }
 
         return moved;
@@ -239,16 +276,20 @@ public class ZZDisconect extends JavaPlugin {
     }
 
     private List<Integer> parseCsvSeconds(String csv) {
-        List<Integer> out = new ArrayList<>();
-        if (csv == null || csv.isBlank()) return out;
+        LinkedHashSet<Integer> values = new LinkedHashSet<>();
+        if (csv == null || csv.isBlank()) return new ArrayList<>();
 
         for (String part : csv.split(",")) {
             try {
                 int v = Integer.parseInt(part.trim());
-                out.add(v);
+                if (v > 0) values.add(v);
             } catch (NumberFormatException ignored) {}
         }
-        return out;
+        return new ArrayList<>(values);
+    }
+
+    private boolean isValidTarget(String host, int port) {
+        return host != null && !host.isBlank() && port > 0 && port <= 65535;
     }
 
     // ===== Messaging helpers =====

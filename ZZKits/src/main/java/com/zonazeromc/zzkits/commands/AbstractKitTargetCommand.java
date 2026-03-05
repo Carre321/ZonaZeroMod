@@ -92,7 +92,21 @@ public abstract class AbstractKitTargetCommand extends AbstractAsyncCommand {
         }
 
         Store<EntityStore> store = targetRef.getStore();
-        World world = ((EntityStore) store.getExternalData()).getWorld();
+        if (store == null || store.getExternalData() == null) {
+            ZZKits.instance().getMensajes().send(ctx, "error_objetivo");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        if (!(store.getExternalData() instanceof EntityStore entityStore)) {
+            ZZKits.instance().getMensajes().send(ctx, "error_objetivo");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        World world = entityStore.getWorld();
+        if (world == null) {
+            ZZKits.instance().getMensajes().send(ctx, "error_objetivo");
+            return CompletableFuture.completedFuture(null);
+        }
 
         return runAsync(ctx, () -> executeTarget(ctx, senderRef, targetRef, world, store), world);
     }
