@@ -94,20 +94,23 @@ public final class PlayerReadyListener {
 
         ItemContainer fallback = inv.getCombinedBackpackStorageHotbarFirst();
 
-        String mode = (inventoryFullMode == null || inventoryFullMode.isEmpty()) ? "DROP" : inventoryFullMode.trim();
+        String mode = (inventoryFullMode == null || inventoryFullMode.isEmpty()) ? "DROP" : inventoryFullMode.trim().toUpperCase();
+        if (!"DROP".equals(mode) && !"CANCEL".equals(mode)) {
+            mode = "CANCEL";
+        }
         boolean canDrop = (playerRef != null && store != null);
-        boolean dropMode = mode.equalsIgnoreCase("DROP") && canDrop;
-        boolean cancelMode = mode.equalsIgnoreCase("CANCEL") || (mode.equalsIgnoreCase("DROP") && !canDrop);
+        boolean dropMode = "DROP".equals(mode) && canDrop;
+        boolean cancelMode = "CANCEL".equals(mode) || ("DROP".equals(mode) && !canDrop);
 
         // Si estamos en CANCEL, comprobar espacio ANTES de tocar el inventario.
-// Modo estricto: si no hay mínimo tantos huecos como stacks a entregar, NO se entrega nada.
+        // Modo estricto: si no hay mínimo tantos huecos como stacks a entregar, NO se entrega nada.
         if (cancelMode) {
             if (!hasSpaceForKitCancelStrict(inv, kit, overwriteSlots)) {
                 return new GiveResult(false, 0, 0, true);
             }
         }
 
-java.util.function.Consumer<ItemStack> dropper = null;
+        java.util.function.Consumer<ItemStack> dropper = null;
         if (dropMode) {
             dropper = (stack) -> {
                 try {
@@ -196,8 +199,6 @@ java.util.function.Consumer<ItemStack> dropper = null;
         ItemContainer backpack = inv.getBackpack();
         ItemContainer armor = inv.getArmor();
         // utility/tools ignorados para kits (evita creative tools)
-        ItemContainer utility = null;
-        ItemContainer tools = null;
 
         int emptyStorage = countEmptySlots(storage);
         int emptyHotbar = countEmptySlots(hotbar);
