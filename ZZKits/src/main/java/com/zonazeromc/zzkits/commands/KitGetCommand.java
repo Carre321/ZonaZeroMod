@@ -34,7 +34,7 @@ public class KitGetCommand extends AbstractKitTargetCommand {
         @Nonnull World world,
         @Nonnull Store<EntityStore> store
     ) {
-        if (!ctx.sender().hasPermission("kit.admin")) {
+        if (!hasKitAdminPermission(ctx)) {
             ZZKits.instance().getMensajes().send(ctx, "no_permiso_admin");
             return;
         }
@@ -87,5 +87,15 @@ public class KitGetCommand extends AbstractKitTargetCommand {
             }
         }
 
+    }
+
+    private boolean hasKitAdminPermission(@Nonnull CommandContext ctx) {
+        // Consola: se permite ejecutar /kit get (si la config no lo desactiva).
+        if (!ctx.isPlayer()) {
+            return true;
+        }
+
+        // Juego: requiere permiso admin del mod.
+        return ctx.sender().hasPermission("kit.admin");
     }
 }
