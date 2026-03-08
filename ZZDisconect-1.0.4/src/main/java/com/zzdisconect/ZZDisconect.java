@@ -69,6 +69,8 @@ public class ZZDisconect extends JavaPlugin {
         // Commands
         getCommandRegistry().registerCommand(new PararCommand(this));
         getCommandRegistry().registerCommand(new HaltCommand(this));
+        getCommandRegistry().registerCommand(new MoveCommand(this));
+        getCommandRegistry().registerCommand(new LobbyCommand(this));
 
         // Handshake redirect (optional)
         this.getEventRegistry().registerGlobal(PlayerSetupConnectEvent.class, this::onPlayerSetupConnect);
