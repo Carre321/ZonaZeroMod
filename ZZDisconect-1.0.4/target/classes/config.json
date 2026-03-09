@@ -1,0 +1,76 @@
+{
+  "ModName": "ZZDisconect",
+  "ConfigVersion": "1.0.0",
+  "ModVersion": "1.0.5",
+  "Debug": false,
+
+  "ServerName": "ZonaZero Survival 01",
+  "ServerId": "zz-survival-01",
+
+  "PlayerPrefix": "[ZZDisconect] ",
+  "ConsolePrefix": "[ZZDisconect] ",
+
+  "PermissionParar": "zzdisconect.command.parar",
+  "PermissionCancelarParada": "zzdisconect.command.cancelarparada",
+  "PermissionAvisos": "zzdisconect.command.avisos",
+
+  "PararEnabled": true,
+  "PararDurationSeconds": 60,
+  "PararBroadcastIntervalsSeconds": "60,30,20,10,5,4,3,2,1",
+  "PararAnnounceDelayMs": 5000,
+  "PararCountdownEverySeconds": 0,
+  "PostTransferDelayMs": 2000,
+  "MarkOfflineAfterRedirect": true,
+  "StopServerAfterRedirect": true,
+
+  "RedirectTargetHost": "127.0.0.1",
+  "RedirectTargetPort": 5520,
+  "FallbackHost": "127.0.0.1",
+  "FallbackPort": 5521,
+  "AllowedDestinationServers": "127.0.0.1:5520,127.0.0.1:5521",
+  "RedirectMaxRetries": 2,
+  "RedirectRetryDelayMs": 250,
+  "FallbackOnRedirectFailure": true,
+  "TransferBatchSize": 25,
+  "TransferBatchDelayMs": 100,
+
+  "HaltEnabled": true,
+  "HaltAnnounceDelayMs": 3000,
+  "HaltEnableWhitelist": true,
+  "OpGroupName": "op",
+
+  "RedirectDuringHandshake": false,
+  "RedirectHost": "127.0.0.1",
+  "RedirectPort": 5520,
+  "MaintenanceMode": false,
+
+  "AvisosEnabled": true,
+  "AvisosPrefix": "[AVISO] ",
+  "AvisosFormat": "{message}",
+  "AvisosAllowPlaceholders": true,
+  "AvisosCooldownSeconds": 10,
+  "AvisosMaxLength": 256,
+
+  "PlaceholderRefreshIntervalSeconds": 1,
+  "StatusMaxPlayers": 150,
+  "StatusOnlineText": "ONLINE",
+  "StatusOfflineText": "OFFLINE",
+  "PingEstimatedText": "N/A",
+
+  "LogAuditEnabled": true,
+
+  "AutoRestartEnabled": false,
+  "AutoRestartAfterSeconds": 0,
+  "AutoRestartWarningsSeconds": "600,300,60,30,10",
+
+  "MsgPararAnnounce": "El servidor se cerrara en {delay}s.",
+  "MsgPararCountdown": "Cierre en {seconds}s. Destino %zz_redirect_target%.",
+  "MsgPararSending": "Redirigiendo a todos los jugadores...",
+  "MsgPararStopping": "Cierre del servidor en curso...",
+  "MsgPararCancelled": "La parada fue cancelada.",
+  "MsgAutoRestartWarning": "Reinicio automatico en {seconds}s.",
+  "MsgAutoRestartStarting": "Reinicio automatico iniciando flujo de parada.",
+  "MsgHaltAnnounce": "Mantenimiento: jugadores no-op seran redirigidos.",
+  "MsgHaltSending": "Redirigiendo jugadores no-op...",
+  "MsgHaltWhitelistEnabled": "Whitelist activada."
+}

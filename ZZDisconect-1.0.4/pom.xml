@@ -15,18 +15,22 @@
     <maven.compiler.source>25</maven.compiler.source>
     <maven.compiler.target>25</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-
-    <!-- Path to the Hytale server API jar on Windows -->
-    <hytale.api.jar>C:\HytalePL\api\HytaleServer.jar</hytale.api.jar>
+    <hytale.server.version>2026.02.19-1a311a592</hytale.server.version>
   </properties>
+
+  <repositories>
+    <repository>
+      <id>hytale-release</id>
+      <url>https://maven.hytale.com/release</url>
+    </repository>
+  </repositories>
 
   <dependencies>
     <dependency>
       <groupId>com.hypixel.hytale</groupId>
       <artifactId>Server</artifactId>
-      <version>local</version>
-      <scope>system</scope>
-      <systemPath>${hytale.api.jar}</systemPath>
+      <version>${hytale.server.version}</version>
+      <scope>provided</scope>
     </dependency>
   </dependencies>
 

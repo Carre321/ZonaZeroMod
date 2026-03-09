@@ -9,39 +9,22 @@ import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.util.Config;
-import com.hypixel.hytale.server.core.permissions.PermissionsModule;
 
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
-/**
- * ZZDisconect 1.0.4
- *
- * - /parar --confirm:
- *    1) broadcast announcement
- *    2) wait PararAnnounceDelayMs (+ optional countdown)
- *    3) refer ALL players to fallback
- *    4) wait PostTransferDelayMs
- *    5) execute built-in "stop" command (console)
- *
- * - /halt --confirm:
- *    1) broadcast announcement
- *    2) wait HaltAnnounceDelayMs
- *    3) refer NON-OP players to fallback (ops stay)
- *    4) enable whitelist (optional) by executing "whitelist enable" (console)
- *
- * - AutoRestart:
- *    after AutoRestartAfterSeconds, sends warnings at configured offsets then runs the same /parar flow.
- */
 public class ZZDisconect extends JavaPlugin {
 
     private final Config<ZZDisconectConfig> config;
-    private final Config<ZZDisconectMessages> messages;
 
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -50,52 +33,77 @@ public class ZZDisconect extends JavaPlugin {
                 return t;
             });
 
-    private final AtomicBoolean pararRunning = new AtomicBoolean(false);
     private final AtomicBoolean haltRunning = new AtomicBoolean(false);
+
+    private StatusService statusService;
+    private PlaceholderService placeholderService;
+    private BroadcastService broadcastService;
+    private AuditService auditService;
+    private CooldownService cooldownService;
+    private PermissionService permissionService;
+
+    private ScheduledFuture<?> placeholderRefreshTask;
+    private ScheduledFuture<?> pararCountdownTask;
+    private ScheduledFuture<?> pararFinishTask;
+    private ScheduledFuture<?> persistentAvisoTask;
+    private volatile String persistentAvisoMessage;
+    private final List<ScheduledFuture<?>> autoRestartTasks = new CopyOnWriteArrayList<>();
 
     public ZZDisconect(@Nonnull JavaPluginInit init) {
         super(init);
-        this.config = this.withConfig("ZZDisconect", ZZDisconectConfig.CODEC);
-
-        // This creates "messages.json" in the plugin data directory.
-        this.messages = this.withConfig("messages", ZZDisconectMessages.CODEC);
+        this.config = this.withConfig("config", ZZDisconectConfig.CODEC);
     }
 
     @Override
     protected void setup() {
         this.config.save();
-        this.messages.save();
 
-        // Commands
+        this.statusService = new StatusService();
+        this.placeholderService = new PlaceholderService();
+        this.broadcastService = new BroadcastService(this);
+        this.auditService = new AuditService(this);
+        this.cooldownService = new CooldownService();
+        this.permissionService = new PermissionService(this);
+
         getCommandRegistry().registerCommand(new PararCommand(this));
+        getCommandRegistry().registerCommand(new CancelarParadaCommand(this));
         getCommandRegistry().registerCommand(new HaltCommand(this));
         getCommandRegistry().registerCommand(new MoveCommand(this));
         getCommandRegistry().registerCommand(new LobbyCommand(this));
+        getCommandRegistry().registerCommand(new AvisosCommand(this));
+        getCommandRegistry().registerCommand(new ZZDisconectCommand(this));
 
-        // Handshake redirect (optional)
         this.getEventRegistry().registerGlobal(PlayerSetupConnectEvent.class, this::onPlayerSetupConnect);
 
-        getLogger().at(Level.INFO).log("ZZDisconect setup OK. Use /parar --confirm or /halt --confirm.");
+        statusService.setState(getMainConfig().get().isMaintenanceMode() ? ServerState.MAINTENANCE : ServerState.ONLINE);
+        placeholderService.refresh(getMainConfig().get(), statusService);
+
+        getLogger().at(Level.INFO).log("ZZDisconect setup OK. /zzparar <mensaje> <tiempo>, /cancelarparada --confirm, /aviso \"mensaje\" [segundos|static], /zzdisconect reload");
     }
 
     @Override
     protected void start() {
-        // Auto restart schedule (single cycle until stop happens)
         ZZDisconectConfig cfg = config.get();
-        if (cfg.isAutoRestartEnabled() && cfg.getAutoRestartAfterSeconds() > 0) {
-            scheduleAutoRestart(cfg.getAutoRestartAfterSeconds(), cfg.getAutoRestartWarningsSeconds());
-        }
+        restartScheduledTasks(cfg);
     }
 
     @Override
     protected void shutdown() {
+        if (placeholderRefreshTask != null) {
+            placeholderRefreshTask.cancel(false);
+        }
+        cancelPararTasks();
+        cancelPersistentAvisoTask();
+        cancelAutoRestartTasks();
         scheduler.shutdownNow();
     }
 
     private void onPlayerSetupConnect(PlayerSetupConnectEvent event) {
         ZZDisconectConfig cfg = config.get();
 
-        if (!cfg.isRedirectDuringHandshake() || !cfg.isMaintenanceMode()) return;
+        if (!cfg.isRedirectDuringHandshake() || !cfg.isMaintenanceMode()) {
+            return;
+        }
 
         if (!isValidTarget(cfg.getRedirectHost(), cfg.getRedirectPort())) {
             getLogger().at(Level.WARNING).log("Handshake redirect skipped due to invalid RedirectHost/RedirectPort configuration.");
@@ -103,64 +111,221 @@ public class ZZDisconect extends JavaPlugin {
         }
 
         event.referToServer(cfg.getRedirectHost(), cfg.getRedirectPort());
-        event.setReason("Servidor en mantenimiento. Redirigiendo…");
+        event.setReason("Servidor en mantenimiento. Redirigiendo...");
         event.setCancelled(true);
     }
 
-    // ===== Public accessors =====
-    public Config<ZZDisconectConfig> getMainConfig() { return config; }
+    public Config<ZZDisconectConfig> getMainConfig() {
+        return config;
+    }
 
-    // ===== /parar flow =====
+    public synchronized boolean reloadRuntime(String trigger) {
+        try {
+            config.load().join();
+            ZZDisconectConfig cfg = config.get();
+
+            if (!statusService.isShutdownInProgress()) {
+                statusService.setState(cfg.isMaintenanceMode() ? ServerState.MAINTENANCE : ServerState.ONLINE);
+            }
+
+            placeholderService.refresh(cfg, statusService);
+            restartScheduledTasks(cfg);
+
+            auditService.log("plugin.reload", trigger, "ok");
+            getLogger().at(Level.INFO).log("ZZDisconect configuration reloaded. trigger=%s", trigger);
+            return true;
+        } catch (Throwable t) {
+            getLogger().at(Level.SEVERE).withCause(t).log("reloadRuntime failed. trigger=%s", trigger);
+            return false;
+        }
+    }
+
+    public PlaceholderService getPlaceholderService() {
+        return placeholderService;
+    }
+
+    public BroadcastService getBroadcastService() {
+        return broadcastService;
+    }
+
+    public AuditService getAuditService() {
+        return auditService;
+    }
+
+    public CooldownService getCooldownService() {
+        return cooldownService;
+    }
+
+    public void sendAvisoCenter(String formattedMessage, int durationSeconds, String trigger) {
+        int safeSeconds = Math.max(1, durationSeconds);
+        broadcastService.globalCenterRaw(formattedMessage, (float) safeSeconds);
+        auditService.log("aviso.send", trigger, "mode=timed duration=" + safeSeconds);
+    }
+
+    public synchronized void setPersistentAviso(String formattedMessage, String trigger) {
+        String msg = formattedMessage == null ? "" : formattedMessage.trim();
+        if (msg.isBlank()) {
+            return;
+        }
+
+        persistentAvisoMessage = msg;
+        cancelPersistentAvisoTask();
+
+        final float segmentDurationSeconds = 6.0f;
+        broadcastService.globalCenterRaw(msg, segmentDurationSeconds, 0.1f, 0.1f);
+        persistentAvisoTask = scheduler.scheduleAtFixedRate(() -> {
+            String sticky = persistentAvisoMessage;
+            if (sticky == null || sticky.isBlank()) {
+                return;
+            }
+            broadcastService.globalCenterRaw(sticky, segmentDurationSeconds, 0.05f, 0.05f);
+        }, 3, 3, TimeUnit.SECONDS);
+
+        auditService.log("aviso.send", trigger, "mode=static");
+    }
+
+    public synchronized void clearPersistentAviso(String trigger) {
+        persistentAvisoMessage = null;
+        cancelPersistentAvisoTask();
+        broadcastService.hideCenter(0.1f);
+        auditService.log("aviso.clear", trigger, "");
+    }
+
+    public boolean isPararRunning() {
+        return statusService.isShutdownInProgress();
+    }
+
     public void runPararSequence(String trigger) {
+        runPararSequence(trigger, null, null);
+    }
+
+    public void runPararSequence(String trigger, String customMessage, Integer customDurationSeconds) {
+        ZZDisconectConfig cfg = config.get();
+
         if (haltRunning.get()) {
             getLogger().at(Level.INFO).log("Cannot start parar while halt sequence is running. Trigger=%s", trigger);
             return;
         }
 
-        if (!pararRunning.compareAndSet(false, true)) {
+        if (!statusService.getState().equals(ServerState.ONLINE) && !statusService.getState().equals(ServerState.MAINTENANCE)) {
+            getLogger().at(Level.INFO).log("Cannot start parar from state=%s. Trigger=%s", statusService.getState(), trigger);
+            return;
+        }
+
+        if (statusService.isShutdownInProgress()) {
             getLogger().at(Level.INFO).log("Parar sequence already running. Ignoring trigger=%s", trigger);
             return;
         }
 
-        try {
-            ZZDisconectConfig cfg = config.get();
-            ZZDisconectMessages msg = messages.get();
+        if (!isValidTarget(cfg.getRedirectTargetHost(), cfg.getRedirectTargetPort())) {
+            getLogger().at(Level.WARNING).log("Invalid redirect target host/port. trigger=%s", trigger);
+            return;
+        }
 
-            int delayMs = Math.max(0, cfg.getPararAnnounceDelayMs());
-            int delaySec = (int) Math.ceil(delayMs / 1000.0);
+        statusService.setShutdownInProgress(true);
+        statusService.setState(ServerState.SHUTTING_DOWN);
+        int duration = Math.max(1, customDurationSeconds != null ? customDurationSeconds : cfg.getPararDurationSeconds());
+        statusService.setShutdownEndEpochMs(System.currentTimeMillis() + (duration * 1000L));
 
-            broadcast(prefix(msg) + Text.fmt(msg.getPararAnnounce(), Text.vars("delay", delaySec)));
+        auditService.log("parar.start", trigger, "duration=" + duration + " target=" + cfg.getRedirectTargetHost() + ":" + cfg.getRedirectTargetPort());
 
-            // Optional countdown broadcasts
-            int every = Math.max(0, cfg.getPararCountdownEverySeconds());
-            if (delaySec > 0 && every > 0) {
-                countdown(delaySec, every, (remaining) ->
-                        prefix(msg) + Text.fmt(msg.getPararCountdown(), Text.vars("seconds", remaining)));
-            } else if (delayMs > 0) {
-                sleep(delayMs);
+        String announceTemplate = customMessage != null && !customMessage.isBlank()
+                ? customMessage.trim()
+                : Text.fmt(cfg.getMsgPararAnnounce(), Text.vars("delay", duration));
+        broadcastService.globalCenterRaw(buildClosingBroadcastMessage(announceTemplate, duration));
+
+        pararCountdownTask = scheduler.scheduleAtFixedRate(() -> {
+            int remaining = statusService.getShutdownRemainingSeconds();
+            if (remaining <= 0 || !statusService.isShutdownInProgress()) {
+                return;
+            }
+            broadcastService.globalCenterRaw(buildClosingBroadcastMessage(announceTemplate, remaining));
+        }, 1, 1, TimeUnit.SECONDS);
+
+        pararFinishTask = scheduler.schedule(() -> finishPararSequence(trigger), duration, TimeUnit.SECONDS);
+    }
+
+    public boolean cancelPararSequence(String trigger) {
+        if (!statusService.isShutdownInProgress()) {
+            return false;
+        }
+
+        if (statusService.getState() == ServerState.REDIRECTING) {
+            return false;
+        }
+
+        cancelPararTasks();
+        statusService.setShutdownInProgress(false);
+        statusService.clearShutdownTimer();
+        statusService.setState(config.get().isMaintenanceMode() ? ServerState.MAINTENANCE : ServerState.ONLINE);
+
+        broadcastService.globalCenterRaw(config.get().getMsgPararCancelled());
+        auditService.log("parar.cancel", trigger, "");
+        return true;
+    }
+
+    private void finishPararSequence(String trigger) {
+        ZZDisconectConfig cfg = config.get();
+
+        if (!statusService.isShutdownInProgress()) {
+            return;
+        }
+
+        statusService.setState(ServerState.REDIRECTING);
+
+        broadcastService.globalCenterRaw(cfg.getMsgPararSending());
+
+        int total = 0;
+        int moved = 0;
+        int failed = 0;
+
+        List<PlayerRef> players = Universe.get().getPlayers();
+        int batchSize = Math.max(1, cfg.getTransferBatchSize());
+        int batchDelayMs = Math.max(0, cfg.getTransferBatchDelayMs());
+
+        for (int i = 0; i < players.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, players.size());
+            for (int j = i; j < end; j++) {
+                PlayerRef playerRef = players.get(j);
+                if (playerRef == null || !playerRef.isValid()) {
+                    continue;
+                }
+                total++;
+                if (redirectPlayerWithFallback(playerRef)) {
+                    moved++;
+                } else {
+                    failed++;
+                }
             }
 
-            broadcast(prefix(msg) + msg.getPararSending());
-            int moved = referPlayers(false); // false => move ALL
-            getLogger().at(Level.INFO).log("Parar: referred %d players. Trigger=%s", moved, trigger);
+            if (batchDelayMs > 0 && end < players.size()) {
+                sleep(batchDelayMs);
+            }
+        }
 
-            sleep(Math.max(0, cfg.getPostTransferDelayMs()));
+        auditService.log("parar.redirect", trigger, "moved=" + moved + " failed=" + failed + " total=" + total);
 
-            broadcast(prefix(msg) + msg.getPararStopping());
+        sleep(Math.max(0, cfg.getPostTransferDelayMs()));
 
-            // Execute built-in /stop
+        broadcastService.globalCenterRaw(cfg.getMsgPararStopping());
+
+        if (cfg.isMarkOfflineAfterRedirect()) {
+            statusService.setState(ServerState.OFFLINE);
+        } else {
+            statusService.setState(ServerState.SHUTTING_DOWN);
+        }
+
+        statusService.setShutdownInProgress(false);
+        statusService.clearShutdownTimer();
+        cancelPararTasks();
+
+        if (cfg.isStopServerAfterRedirect()) {
             CommandManager.get().handleCommand(ConsoleSender.INSTANCE, "stop");
-
-        } catch (Throwable t) {
-            getLogger().at(Level.SEVERE).withCause(t).log("runPararSequence failed");
-        } finally {
-            pararRunning.set(false);
         }
     }
 
-    // ===== /halt flow =====
     public void runHaltSequence(String trigger) {
-        if (pararRunning.get()) {
+        if (statusService.isShutdownInProgress()) {
             getLogger().at(Level.INFO).log("Cannot start halt while parar sequence is running. Trigger=%s", trigger);
             return;
         }
@@ -172,21 +337,33 @@ public class ZZDisconect extends JavaPlugin {
 
         try {
             ZZDisconectConfig cfg = config.get();
-            ZZDisconectMessages msg = messages.get();
 
-            broadcast(prefix(msg) + msg.getHaltAnnounce());
-
+            statusService.setState(ServerState.MAINTENANCE);
+            broadcastService.global(cfg.getMsgHaltAnnounce());
             sleep(Math.max(0, cfg.getHaltAnnounceDelayMs()));
 
-            broadcast(prefix(msg) + msg.getHaltSending());
+            broadcastService.global(cfg.getMsgHaltSending());
 
-            int moved = referPlayers(true); // true => only non-op
-            getLogger().at(Level.INFO).log("Halt: referred %d non-op players. Trigger=%s", moved, trigger);
+            int moved = 0;
+            for (PlayerRef playerRef : Universe.get().getPlayers()) {
+                if (playerRef == null || !playerRef.isValid()) {
+                    continue;
+                }
+
+                if (permissionService.isOp(playerRef)) {
+                    continue;
+                }
+
+                if (redirectPlayerWithFallback(playerRef)) {
+                    moved++;
+                }
+            }
+
+            auditService.log("halt.redirect", trigger, "moved=" + moved);
 
             if (cfg.isHaltEnableWhitelist()) {
-                // Built-in whitelist command (exists in server jar): "whitelist enable"
                 CommandManager.get().handleCommand(ConsoleSender.INSTANCE, "whitelist enable");
-                broadcast(prefix(msg) + msg.getHaltWhitelistEnabled());
+                broadcastService.global(cfg.getMsgHaltWhitelistEnabled());
             }
         } catch (Throwable t) {
             getLogger().at(Level.SEVERE).withCause(t).log("runHaltSequence failed");
@@ -195,131 +372,155 @@ public class ZZDisconect extends JavaPlugin {
         }
     }
 
-    /**
-     * Refer players to the fallback host/port.
-     *
-     * @param onlyNonOp if true, moves only players NOT in the op group (config OpGroupName)
-     */
-    private int referPlayers(boolean onlyNonOp) {
+    private boolean redirectPlayerWithFallback(PlayerRef playerRef) {
         ZZDisconectConfig cfg = config.get();
-        if (!isValidTarget(cfg.getFallbackHost(), cfg.getFallbackPort())) {
-            getLogger().at(Level.SEVERE).log("Fallback redirection aborted due to invalid FallbackHost/FallbackPort configuration.");
-            return 0;
+
+        int retries = Math.max(0, cfg.getRedirectMaxRetries());
+        for (int i = 0; i <= retries; i++) {
+            try {
+                playerRef.sendMessage(Message.raw(cfg.getPlayerPrefix() + "-> " + cfg.getRedirectTargetHost() + ":" + cfg.getRedirectTargetPort()));
+                playerRef.referToServer(cfg.getRedirectTargetHost(), cfg.getRedirectTargetPort());
+                return true;
+            } catch (Throwable t) {
+                if (i < retries) {
+                    sleep(Math.max(0, cfg.getRedirectRetryDelayMs()));
+                }
+            }
         }
 
-        int moved = 0;
-
-        List<PlayerRef> players = Universe.get().getPlayers();
-        for (PlayerRef playerRef : players) {
-            if (playerRef == null || !playerRef.isValid()) continue;
-
-            if (onlyNonOp && isOp(playerRef)) {
-                continue;
-            }
-
+        if (cfg.isFallbackOnRedirectFailure() && isValidTarget(cfg.getFallbackHost(), cfg.getFallbackPort())) {
             try {
-                playerRef.sendMessage(Message.raw(prefix(messages.get()) + "→ " + cfg.getFallbackHost() + ":" + cfg.getFallbackPort()));
+                // Arquitectura Probable: deteccion de salud de destino/proxy no documentada aun.
+                playerRef.sendMessage(Message.raw(cfg.getPlayerPrefix() + "Fallback -> " + cfg.getFallbackHost() + ":" + cfg.getFallbackPort()));
                 playerRef.referToServer(cfg.getFallbackHost(), cfg.getFallbackPort());
-                moved++;
+                return true;
             } catch (Throwable t) {
                 getLogger().at(Level.WARNING).withCause(t)
-                        .log("Failed to refer player %s to fallback server", playerRef.getUuid());
+                        .log("Fallback redirect failed for player %s", playerRef.getUuid());
             }
         }
 
-        return moved;
+        getLogger().at(Level.WARNING).log("Redirect failed for player %s", playerRef.getUuid());
+        return false;
     }
 
-    /**
-     * Determine OP status via PermissionsModule groups.
-     */
-    private boolean isOp(PlayerRef playerRef) {
-        try {
-            String opGroup = config.get().getOpGroupName();
-            return PermissionsModule.get().getGroupsForUser(playerRef.getUuid()).contains(opGroup);
-        } catch (Throwable t) {
-            // If permissions module isn't ready for some reason, default to "not op"
-            return false;
-        }
-    }
-
-    // ===== Auto Restart =====
     private void scheduleAutoRestart(int afterSeconds, String warningsCsv) {
-        ZZDisconectMessages msg = messages.get();
+        ZZDisconectConfig cfg = config.get();
 
-        // schedule warning broadcasts
         List<Integer> warnings = parseCsvSeconds(warningsCsv);
-        // ensure unique and sorted descending (e.g. 600,300,60...)
         warnings.sort((a, b) -> Integer.compare(b, a));
 
         for (int w : warnings) {
-            if (w <= 0) continue;
+            if (w <= 0) {
+                continue;
+            }
             int delay = afterSeconds - w;
-            if (delay < 0) continue;
+            if (delay < 0) {
+                continue;
+            }
 
             ScheduledFuture<Void> f = scheduler.schedule(() -> {
-                broadcast(prefix(msg) + Text.fmt(msg.getAutoRestartWarning(), Text.vars("seconds", w)));
+                broadcastService.global(Text.fmt(cfg.getMsgAutoRestartWarning(), Text.vars("seconds", w)));
                 return null;
             }, delay, TimeUnit.SECONDS);
 
+            autoRestartTasks.add(f);
             getTaskRegistry().registerTask(f);
         }
 
-        // schedule the actual parar sequence
         ScheduledFuture<Void> stopTask = scheduler.schedule(() -> {
-            broadcast(prefix(msg) + msg.getAutoRestartStarting());
+            broadcastService.global(cfg.getMsgAutoRestartStarting());
             runPararSequence("autoRestart");
             return null;
         }, afterSeconds, TimeUnit.SECONDS);
 
+        autoRestartTasks.add(stopTask);
         getTaskRegistry().registerTask(stopTask);
 
         getLogger().at(Level.INFO).log("AutoRestart scheduled in %ds with warnings: %s", afterSeconds, warningsCsv);
     }
 
+    private void restartScheduledTasks(ZZDisconectConfig cfg) {
+        if (scheduler.isShutdown()) {
+            return;
+        }
+
+        if (placeholderRefreshTask != null) {
+            placeholderRefreshTask.cancel(false);
+        }
+
+        int refresh = Math.max(1, cfg.getPlaceholderRefreshIntervalSeconds());
+        placeholderRefreshTask = scheduler.scheduleAtFixedRate(
+                () -> placeholderService.refresh(config.get(), statusService),
+                1,
+                refresh,
+                TimeUnit.SECONDS
+        );
+
+        cancelAutoRestartTasks();
+        if (cfg.isAutoRestartEnabled() && cfg.getAutoRestartAfterSeconds() > 0) {
+            scheduleAutoRestart(cfg.getAutoRestartAfterSeconds(), cfg.getAutoRestartWarningsSeconds());
+        }
+    }
+
+    private void cancelAutoRestartTasks() {
+        for (ScheduledFuture<?> task : autoRestartTasks) {
+            if (task != null) {
+                task.cancel(false);
+            }
+        }
+        autoRestartTasks.clear();
+    }
+
+    private void cancelPersistentAvisoTask() {
+        if (persistentAvisoTask != null) {
+            persistentAvisoTask.cancel(false);
+            persistentAvisoTask = null;
+        }
+    }
+
+    private void cancelPararTasks() {
+        if (pararCountdownTask != null) {
+            pararCountdownTask.cancel(false);
+            pararCountdownTask = null;
+        }
+        if (pararFinishTask != null) {
+            pararFinishTask.cancel(false);
+            pararFinishTask = null;
+        }
+    }
+
+    private String buildClosingBroadcastMessage(String baseMessage, int remainingSeconds) {
+        String safeBase = (baseMessage == null || baseMessage.isBlank()) ? "El servidor se esta cerrando." : baseMessage.trim();
+        return "El servidor se esta cerrando. " + safeBase + " Tiempo restante: " + remainingSeconds + "s.";
+    }
+
     private List<Integer> parseCsvSeconds(String csv) {
         LinkedHashSet<Integer> values = new LinkedHashSet<>();
-        if (csv == null || csv.isBlank()) return new ArrayList<>();
+        if (csv == null || csv.isBlank()) {
+            return new ArrayList<>();
+        }
 
         for (String part : csv.split(",")) {
             try {
                 int v = Integer.parseInt(part.trim());
-                if (v > 0) values.add(v);
-            } catch (NumberFormatException ignored) {}
+                if (v > 0) {
+                    values.add(v);
+                }
+            } catch (NumberFormatException ignored) {
+            }
         }
         return new ArrayList<>(values);
     }
 
-    private boolean isValidTarget(String host, int port) {
+    public boolean isValidTarget(String host, int port) {
         return host != null && !host.isBlank() && port > 0 && port <= 65535;
     }
 
-    // ===== Messaging helpers =====
-    private String prefix(ZZDisconectMessages msg) {
-        return msg.getPrefix() == null ? "" : msg.getPrefix();
-    }
-
-    private void broadcast(String text) {
-        for (PlayerRef p : Universe.get().getPlayers()) {
-            if (p == null || !p.isValid()) continue;
-            p.sendMessage(Message.raw(text));
-        }
-    }
-
-    private void countdown(int totalSeconds, int everySeconds, java.util.function.IntFunction<String> messageFn) {
-        // Broadcast at totalSeconds, totalSeconds-every, ... > 0
-        int remaining = totalSeconds;
-        while (remaining > 0) {
-            if (remaining == totalSeconds || (everySeconds > 0 && (remaining % everySeconds == 0))) {
-                broadcast(messageFn.apply(remaining));
-            }
-            sleep(1000);
-            remaining--;
-        }
-    }
-
     private void sleep(long ms) {
-        if (ms <= 0) return;
+        if (ms <= 0) {
+            return;
+        }
         try {
             Thread.sleep(ms);
         } catch (InterruptedException ignored) {

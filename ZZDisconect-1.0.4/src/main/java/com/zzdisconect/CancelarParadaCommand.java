@@ -7,24 +7,24 @@ import com.hypixel.hytale.server.core.command.system.basecommands.AbstractAsyncC
 import javax.annotation.Nonnull;
 import java.util.concurrent.CompletableFuture;
 
-public class HaltCommand extends AbstractAsyncCommand {
+public class CancelarParadaCommand extends AbstractAsyncCommand {
 
     private final ZZDisconect plugin;
 
-    public HaltCommand(ZZDisconect plugin) {
-        super("halt", "Mantenimiento: manda a no-ops al lobby y activa whitelist (no apaga el servidor)", true);
+    public CancelarParadaCommand(ZZDisconect plugin) {
+        super("cancelarparada", "Cancela el cierre en curso", true);
         this.plugin = plugin;
-        addAliases("zzhalt");
+        addAliases("zzcancelarparada");
     }
 
     @Override
     protected CompletableFuture<Void> executeAsync(@Nonnull CommandContext context) {
-        if (!plugin.getMainConfig().get().isHaltEnabled()) {
-            context.sender().sendMessage(Message.raw("[ZZDisconect] /halt esta deshabilitado en config."));
+        if (!plugin.cancelPararSequence("command:/cancelarparada")) {
+            context.sender().sendMessage(Message.raw("[ZZDisconect] No hay una parada en curso."));
             return CompletableFuture.completedFuture(null);
         }
 
-        plugin.runHaltSequence("command:/halt");
+        context.sender().sendMessage(Message.raw("[ZZDisconect] Parada cancelada."));
         return CompletableFuture.completedFuture(null);
     }
 }
