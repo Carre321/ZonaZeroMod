@@ -1,7 +1,0 @@
-ItemSlot {
-  Anchor: (Width: 48, Height: 48, Right: 4, Bottom: 4);
-  ShowQuantity: true;
-  ShowDurabilityBar: true;
-  ShowQualityBackground: true;
-  HitTestVisible: true;
-}
